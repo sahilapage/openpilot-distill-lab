@@ -1,0 +1,21 @@
+diff --git a/rl/server.py b/rl/server.py
+index ab7a531..32979b1 100644
+--- a/rl/server.py
++++ b/rl/server.py
+@@ -59,6 +59,16 @@ class Runtime:
+             map_location=self.device,
+             weights_only=False,
+         )
++        # ADA_NVFP4_DEQUANT: NVFP4 matmul needs Blackwell (the package declares minimum_compute_capability).
++        # On older GPUs run those MLP weights as plain bf16 instead (dequantized once at load).
++        minimum_capability = tuple(importer.load_pickle("meta", "meta.pkl").get("minimum_compute_capability", (0, 0)))
++        if tuple(torch.cuda.get_device_capability(self.device)) < minimum_capability:
++            from torchao.prototype.mx_formats.nvfp4_tensor import NVFP4Tensor
++
++            state = {
++                name: value.dequantize(torch.bfloat16).contiguous() if isinstance(value, NVFP4Tensor) else value
++                for name, value in state.items()
++            }
+         self.model.load_state_dict(state, strict=True, assign=True)
+         self.model.eval()
+         del state

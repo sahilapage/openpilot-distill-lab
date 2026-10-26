@@ -134,8 +134,36 @@ def main() -> None:
         else None
     )
 
-    for step in range(1, args.steps + 1):
+    # RESUME_PATCH: periodic resumable checkpoint (model + optimizer + step), written atomically
+    resume_path = args.output.with_suffix(".resume.pt")
+    save_every = int(os.environ.get("SAVE_EVERY", 500))
+    start_step = 0
+    if resume_path.exists():
+        state = torch.load(resume_path, map_location=device, weights_only=False)  # own checkpoint; holds numpy scalars
+        raw_model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        start_step = state["step"]
+        if is_main:
+            print(f"resumed from {resume_path} at step {start_step}")
+
+    # INIT_PATCH: start a NEW run (no resume file yet) from another run's weights, fresh optimizer and LR schedule
+    elif os.environ.get("INIT_WEIGHTS"):
+        raw_model.load_state_dict(torch.load(os.environ["INIT_WEIGHTS"], map_location=device))
+        if is_main:
+            print(f"initialised weights from {os.environ['INIT_WEIGHTS']}")
+
+    # LR_PATCH: optional cosine decay from LR_DECAY_START to the last step (down to LR_MIN_RATIO x base), fixed by env
+    # vars so it is identical across resumes; and SNAPSHOT_EVERY weight snapshots (supercombo_step{N}.pt) for model selection.
+    decay_start = int(os.environ.get("LR_DECAY_START", -1))
+    min_ratio = float(os.environ.get("LR_MIN_RATIO", 0.1))
+    snapshot_every = int(os.environ.get("SNAPSHOT_EVERY", 0))
+    for step in range(start_step + 1, args.steps + 1):
         step_start = time.perf_counter()
+        if decay_start >= 0:
+            progress = min(max((step - decay_start) / max(args.steps - decay_start, 1), 0.0), 1.0)
+            lr = float(args.learning_rate) * float(min_ratio + (1 - min_ratio) * 0.5 * (1 + np.cos(np.pi * progress)))
+            for group in optimizer.param_groups:
+                group["lr"] = lr
         inputs, targets = next(batch_iterator)
         while not len(inputs["img"]):
             inputs, targets = next(batch_iterator)
@@ -160,6 +188,7 @@ def main() -> None:
                 "loss": loss.item(),
                 **{name: value.item() for name, value in loss_metrics.items()},
                 "grad_norm": grad_norm.item(),
+                "lr": optimizer.param_groups[0]["lr"],
                 "step_time": time.perf_counter() - step_start,
             }
             if step == 1 or step % 100 == 0:
@@ -186,6 +215,14 @@ def main() -> None:
                 f"time={metrics['step_time']:.2f}s"
             )
             run.log(metrics, step=step)
+            if snapshot_every and step % snapshot_every == 0:
+                snap = args.output.with_name(f"{args.output.stem}_step{step}.pt")
+                torch.save({name: value.detach().cpu() for name, value in raw_model.state_dict().items()}, str(snap) + ".tmp")
+                os.replace(str(snap) + ".tmp", snap)
+            if step % save_every == 0:
+                torch.save({"model": raw_model.state_dict(), "optimizer": optimizer.state_dict(), "step": step},
+                           str(resume_path) + ".tmp")
+                os.replace(str(resume_path) + ".tmp", resume_path)
 
     if is_main:
         torch.save(

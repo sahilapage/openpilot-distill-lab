@@ -5,9 +5,9 @@
 #   tmux new-session -d -s pipeline "/home/sra/sahil_distill/guard.sh /home/sra/sahil_distill/pipeline.log /home/sra/sahil_distill/eval/run_coach.sh"
 W=/home/sra/sahil_distill
 me=$$
-[ -z "$DRY" ] && { tmux kill-session -t pipeline 2>/dev/null; tmux kill-session -t after 2>/dev/null; tmux kill-session -t openloop 2>/dev/null; tmux kill-session -t student 2>/dev/null; tmux kill-session -t snaps 2>/dev/null; tmux kill-session -t anchor 2>/dev/null; tmux kill-session -t more 2>/dev/null; tmux kill-session -t moreeval 2>/dev/null; }
+[ -z "$DRY" ] && { tmux kill-session -t pipeline 2>/dev/null; tmux kill-session -t after 2>/dev/null; tmux kill-session -t openloop 2>/dev/null; tmux kill-session -t student 2>/dev/null; tmux kill-session -t snaps 2>/dev/null; tmux kill-session -t anchor 2>/dev/null; tmux kill-session -t more 2>/dev/null; tmux kill-session -t moreeval 2>/dev/null; tmux kill-session -t scale 2>/dev/null; }
 groups=""
-for p in $(pgrep -u "$(id -u)" -f "guard\.sh|run_(coach|pipeline|extend|shove|after|openloop|openloop_snapshots|student|resume_student|anchor|student_more|more_eval)\.sh|train_dagger\.py|eval_(closed_loop|shove|open_loop)\.py|measure_forgiveness\.py|calibrate_forgiveness\.py|rl\.server|supervised\.train"); do
+for p in $(pgrep -u "$(id -u)" -f "guard\.sh|run_(coach|pipeline|extend|shove|after|openloop|openloop_snapshots|student|resume_student|anchor|student_more|more_eval|scale)\.sh|download_big\.sh|check_segments\.py|train_dagger\.py|eval_(closed_loop|shove|open_loop)\.py|measure_forgiveness\.py|calibrate_forgiveness\.py|rl\.server|supervised\.train"); do
   [ "$p" = "$me" ] && continue
   case "$(readlink /proc/$p/cwd 2>/dev/null)" in $W|$W/*) ;; *) continue;; esac
   case "$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)" in *stop_pipeline*|*ssh*) continue;; esac

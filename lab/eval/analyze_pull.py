@@ -10,8 +10,10 @@ A constant steering-rate disturbance (pull_dps) is added to every policy's comma
                  right vs left pull
 
   python -I analyze_pull.py results_pull_fixed.jsonl [val_segments.txt]
+PULL_REFS=straight,student40k picks the reference policies for the paired differences.
 """
 import json
+import os
 import sys
 from collections import defaultdict
 
@@ -88,7 +90,7 @@ def table(rows, title, rng):
         print(f"{pol:>10}  " + "  ".join(f"{c[:, t].mean():>+7.2f}" for t in ts)
               + f"   {c[:, -1].mean():+6.2f} [{np.percentile(bs, 2.5):+.2f},{np.percentile(bs, 97.5):+.2f}]   {100 * canc:>7.0f}%        {1e3 * cs:+.2f}e-3    {100 * rec:>4.0f}%")
     print("\npaired final-drift difference (m, negative = drifts less), cluster bootstrap over drives")
-    for ref in ("straight", "student"):
+    for ref in os.environ.get("PULL_REFS", "straight,student").split(","):
         if ref not in pols:
             continue
         for pol in pols:

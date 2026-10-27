@@ -1,4 +1,4 @@
-"""World-model rollouts (lab/eval/collect_wm.py) as training batches in the same format as Comma1MDataset.
+"""World-model rollouts (python -m rl.collect) as training batches in the same format as Comma1MDataset.
 
 A sample is the 9-step image history the student sees, ending on a GENERATED frame: step t holds the (previous,
 current) 5 Hz frame pair, each upscaled to 512x256 and packed to YUV planes exactly as rl.actor.SupercomboActor does in

@@ -29,3 +29,44 @@ DAgger style post-training in a learned world model as a simulator.
 https://github.com/user-attachments/assets/45ba3950-9a90-45c2-af15-f7e55f87785e
 
 Have fun!
+
+## This fork
+
+Built on [openpilot.distill](https://github.com/YassineYousfi/openpilot.distill). Same three steps, plus:
+
+### Runs on a 4090
+
+The world model ships NVFP4 weights, which need a Blackwell GPU. On older GPUs `rl/server.py` dequantizes them to bf16 once at load. Nothing else changes.
+
+### Check your student on roads it never trained on
+
+Every model watches the same real, logged drive and steers. The human's steering comes from the localizer. Steering gain 1.0 = the model turns the wheel as much as the human did. Drives in the training split and unseen drives (the dataset's validation split) are reported separately, so memorisation shows up.
+
+```
+python -m rl.server &
+python -m eval.open_loop run --segments eval.txt --out open_loop.jsonl \
+    --policy teacher=teacher --policy student=student:outputs/supervised/supercombo.pt
+python -m eval.open_loop summary open_loop.jsonl
+```
+
+And watch it: every model's steering drawn on the real camera, the human as white dots.
+
+```
+python -m eval.realroad_video video.mp4 open_loop.jsonl SEGMENT:START:STEPS \
+    --policy teacher="comma's model" --policy student="my student"
+```
+
+### DAgger with the whole network
+
+A student trained on logged drives only ever sees the car where a human put it. So let it drive inside the world model, push it off course with a random steering pull, and save what it sees. The teacher labels those frames online, and every training step mixes a logged batch with a world-model batch.
+
+```
+python -m rl.server &
+python -m rl.collect --segments train.txt --out-dir outputs/wm_data/iter1 --rollouts 600 \
+    --driver student=student:outputs/supervised/supercombo.pt --driver teacher=teacher --driver-weights 0.5,0.5
+WM_DATA=outputs/wm_data INIT_WEIGHTS=outputs/supervised/supercombo.pt \
+    torchrun --standalone --nproc-per-node=1 -m supervised.train --steps 6000 --learning-rate 1e-4 \
+    -o outputs/dagger/iter1/supercombo.pt
+```
+
+Repeat with the new student as the driver. `supervised/train.py` also takes `INIT_WEIGHTS` (start from a checkpoint), `SAVE_EVERY` (resumable checkpoints), `LR_DECAY_START` / `LR_MIN_RATIO` (cosine decay) and `SNAPSHOT_EVERY` (weight snapshots).

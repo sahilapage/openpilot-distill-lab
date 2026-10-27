@@ -108,7 +108,7 @@ if [ ! -f $M/control ]; then
   log "stage 4: control run on the original drives"
   mkdir -p $W/data_control/data
   for seg in $(cat $W/chosen_segments.txt); do
-    [ -e $W/data_control/data/$seg ] || ln -s $W/openpilot.distill/data/$seg $W/data_control/data/$seg
+    [ -e $W/data_control/data/$seg ] || cp -al $W/openpilot.distill/data/$seg $W/data_control/data/$seg  # hard links: fsspec glob skips symlinked dirs
   done
   log "control dataset: $(ls $W/data_control/data | wc -l) segments"
   train $CONTROL $W/data_control $W/stage16_control.log

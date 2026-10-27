@@ -3,11 +3,12 @@
 # resumable and marked done in $W/scale_markers/, so re-running the script skips finished work.
 #   1 pull     steering-pull test (3 deg/s, same drives/starts/seed as results_pull_fixed) for straight, teacher, the
 #              40k student (128 training drives) and the bigger-data student (360)  -> results_pull_scale.jsonl
-#   2 big      wait for download_big.sh; load every staged comma 3/3X segment once through the training loader; train
-#              the same recipe (init 40k student, 40k steps, cosine 3e-4 -> 3e-5, batch 8) on all of data/
-#   3 bigeval  open-loop on the same 42 drives as results_open_loop_more.jsonl (big snapshots), + pull test of bigfinal
-#   4 control  the same recipe on ONLY the original 128 training drives (does data or the extra 40k steps help?)
-#   5 ctleval  open-loop + pull test of the control
+#   2 control  the same recipe (init 40k student, 40k steps, cosine 3e-4 -> 3e-5, batch 8) on ONLY the original 128
+#              training drives: does the data or the extra 40k steps help? Runs while the comma 3/3X download finishes.
+#   3 ctleval  open-loop on the same 42 drives as results_open_loop_more.jsonl (control snapshots), + pull test
+#   4 big      wait for download_big.sh; load every staged comma 3/3X segment once through the training loader; train
+#              the same recipe on all of data/
+#   5 bigeval  open-loop + pull test of the big student
 # Logs SCALE_DONE.
 #   tmux new-session -d -s scale "/home/sra/sahil_distill/guard.sh /home/sra/sahil_distill/scale.log /home/sra/sahil_distill/eval/run_scale.sh"
 W=/home/sra/sahil_distill
@@ -102,7 +103,27 @@ if [ ! -f $M/pull ]; then
   touch $M/pull; log "stage 1 done: $W/analysis_pull_scale.txt"
 fi
 
-# ---- 2. bigger data: comma four + comma 3/3X
+# ---- 2. control: same recipe, only the original 128 training drives (+ their 12 val, which training skips)
+if [ ! -f $M/control ]; then
+  log "stage 4: control run on the original drives"
+  mkdir -p $W/data_control/data
+  for seg in $(cat $W/chosen_segments.txt); do
+    [ -e $W/data_control/data/$seg ] || ln -s $W/openpilot.distill/data/$seg $W/data_control/data/$seg
+  done
+  log "control dataset: $(ls $W/data_control/data | wc -l) segments"
+  train $CONTROL $W/data_control $W/stage16_control.log
+  touch $M/control; log "stage 4 done: $CONTROL"
+fi
+
+# ---- 3. evaluate the control
+if [ ! -f $M/ctleval ]; then
+  log "stage 5: open-loop + pull test of the control"
+  openloop $W/results_open_loop_control.jsonl $(snapshot_policies control outputs/supervised_control)
+  pull --policy control=student:$CONTROL
+  touch $M/ctleval; log "stage 5 done"
+fi
+
+# ---- 4. bigger data: comma four + comma 3/3X
 if [ ! -f $M/big ]; then
   log "stage 2: waiting for DOWNLOAD_BIG_DONE"
   until grep -q DOWNLOAD_BIG_DONE $W/download_big.log 2>/dev/null; do
@@ -128,31 +149,11 @@ if [ ! -f $M/big ]; then
   touch $M/big; log "stage 2 done: $BIG"
 fi
 
-# ---- 3. evaluate the bigger-data student
+# ---- 5. evaluate the bigger-data student
 if [ ! -f $M/bigeval ]; then
   log "stage 3: open-loop + pull test of the big student"
   openloop $W/results_open_loop_big.jsonl $(snapshot_policies big outputs/supervised_big)
   pull --policy big=student:$BIG
   touch $M/bigeval; log "stage 3 done: $W/analysis_open_loop_scale.txt, $W/analysis_pull_scale.txt"
-fi
-
-# ---- 4. control: same recipe, only the original 128 training drives (+ their 12 val, which training skips)
-if [ ! -f $M/control ]; then
-  log "stage 4: control run on the original drives"
-  mkdir -p $W/data_control/data
-  for seg in $(cat $W/chosen_segments.txt); do
-    [ -e $W/data_control/data/$seg ] || ln -s $W/openpilot.distill/data/$seg $W/data_control/data/$seg
-  done
-  log "control dataset: $(ls $W/data_control/data | wc -l) segments"
-  train $CONTROL $W/data_control $W/stage16_control.log
-  touch $M/control; log "stage 4 done: $CONTROL"
-fi
-
-# ---- 5. evaluate the control
-if [ ! -f $M/ctleval ]; then
-  log "stage 5: open-loop + pull test of the control"
-  openloop $W/results_open_loop_control.jsonl $(snapshot_policies control outputs/supervised_control)
-  pull --policy control=student:$CONTROL
-  touch $M/ctleval; log "stage 5 done"
 fi
 log "SCALE_DONE"

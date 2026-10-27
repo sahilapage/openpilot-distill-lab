@@ -17,7 +17,7 @@ cp $SRC/ada_nvfp4_dequant.patch $REPO/lab/patches/
 cp $SRC/sync_to_github.sh $REPO/lab/
 
 # repo files edited on the box (train.py patches, server dequant): take the box's working tree, retrying ZeroTier drops
-for f in supervised/train.py rl/server.py; do
+for f in supervised/train.py supervised/wm_dataset.py rl/server.py; do
   for i in 1 2 3 4 5; do scp -q -o ConnectTimeout=8 gpu:/home/sra/sahil_distill/openpilot.distill/$f $REPO/$f && break; sleep 5; done
 done
 

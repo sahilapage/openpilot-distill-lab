@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 import wandb
 
 from .dataset import Comma1MDataset, DatasetConfig, prefill_supercombo_batch
+from .wm_dataset import WorldModelDataset
 from .model import Supercombo
 from .model_for_inference import InputQueues, ORTSupercomboForInference
 
@@ -24,7 +25,7 @@ TARGET_OUTPUTS = ("wide_from_device_euler", "pose", "plan", "action")
 LOSS_WEIGHTS = {"gt/imgs": 100.0, "distill/lead": 0.05, "distill/hidden_state": 10.0}
 
 
-def loss_fn(predictions, targets, teacher_targets):
+def loss_fn(predictions, targets, teacher_targets, outputs=TARGET_OUTPUTS):
     predicted_images = predictions["imgs"][:, -1].float() / 127.5 - 1
     target_images = targets["imgs"].permute(0, 3, 1, 2).float() / 127.5 - 1
     target_losses = {"imgs": F.mse_loss(predicted_images, target_images)}
@@ -33,7 +34,7 @@ def loss_fn(predictions, targets, teacher_targets):
             predictions[name][..., : targets[name].shape[-1]].float(),
             targets[name].float(),
         )
-        for name in TARGET_OUTPUTS
+        for name in outputs
     }
     distill_losses = {
         name: F.mse_loss(
@@ -108,6 +109,25 @@ def main() -> None:
         )
     )
 
+    # WM_PATCH (DAgger v2): with WM_DATA set, every step also trains on a batch of world-model rollouts
+    # (wm_dataset.py), labelled by the teacher online; only the image reconstruction has a ground truth there.
+    wm_root = os.environ.get("WM_DATA")
+    wm_weight = float(os.environ.get("WM_WEIGHT", 1.0))
+    wm_iterator = (
+        iter(
+            DataLoader(
+                WorldModelDataset(wm_root, batch_size=args.batch_size),
+                batch_size=None,
+                num_workers=int(os.environ.get("WM_WORKERS", 4)),
+                collate_fn=_identity,
+                multiprocessing_context="spawn",
+                persistent_workers=True,
+            )
+        )
+        if wm_root
+        else None
+    )
+
     raw_model = Supercombo().to(device)
     model = DDP(raw_model, device_ids=[local_rank]) if distributed else raw_model
     optimizer = torch.optim.AdamW(
@@ -179,6 +199,17 @@ def main() -> None:
             predictions = model(inputs)
             loss, loss_metrics = loss_fn(predictions, targets, teacher_targets)
         loss.backward()
+        if wm_iterator is not None:
+            wm_inputs, wm_targets = next(wm_iterator)
+            wm_queues = InputQueues.from_model(teacher, batch_size=len(wm_inputs["img"]))
+            wm_teacher = {k: torch.from_numpy(v).to(device) for k, v in prefill_supercombo_batch(teacher, wm_queues, wm_inputs).items()}
+            wm_inputs = {k: torch.from_numpy(v).to(device) for k, v in wm_inputs.items()}
+            wm_targets = {k: torch.from_numpy(v).to(device) for k, v in wm_targets.items()}
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                wm_loss, wm_metrics = loss_fn(model(wm_inputs), wm_targets, wm_teacher, outputs=())
+            (wm_weight * wm_loss).backward()
+            loss_metrics = {**loss_metrics, "wm": wm_loss.detach(), "wm/distill": wm_metrics["distill"].detach(),
+                            **{f"wm/{k}": v.detach() for k, v in wm_metrics.items() if k.startswith("distill/")}}
         grad_norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)
         optimizer.step()
 
@@ -212,7 +243,8 @@ def main() -> None:
             print(
                 f"step {step}/{args.steps}: loss={metrics['loss']:.6g} "
                 f"gt={metrics['gt']:.6g} distill={metrics['distill']:.6g} "
-                f"time={metrics['step_time']:.2f}s"
+                + (f"wm={metrics['wm']:.6g} wm_distill={metrics['wm/distill']:.6g} " if "wm" in metrics else "")
+                + f"time={metrics['step_time']:.2f}s"
             )
             run.log(metrics, step=step)
             if snapshot_every and step % snapshot_every == 0:

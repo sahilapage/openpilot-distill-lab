@@ -5,8 +5,9 @@ random moment of a random logged segment. In most rollouts a constant steering p
 commands (DART-style noise), so the car drifts off-centre and the data covers the states a policy must recover from.
 
 Every rollout is saved as <out-dir>/r{index:06d}.npz: the world model's frames (the 9 real history frames, then every
-generated frame, exactly what the policy sees in closed loop) plus a little metadata. No labels are stored: training
-runs the teacher on the same frames online (WM_DATA=<out-dir> python -m supervised.train ...).
+generated frame, exactly what the policy sees in closed loop), the world model's own plan for every generated frame, and
+a little metadata. Training runs the teacher on the same frames online (WM_DATA=<out-dir> python -m supervised.train);
+WM_PLAN_LABELS=1 steers by the world model's plan instead (it is anchored to where the human really went).
 Rollout i is seeded by (seed, i), so a killed run resumes exactly where it stopped.
 
   python -m rl.server &
@@ -71,9 +72,12 @@ def left_hand_traffic(segment: str) -> bool:
     return reverse_geocoder.search((lat, lon), mode=1, verbose=False)[0]["cc"] in LHT_COUNTRIES
 
 
-def save(path: Path, frames: np.ndarray, meta: dict) -> None:
+def save(path: Path, frames: np.ndarray, meta: dict, plan: np.ndarray | None = None) -> None:
     buf = io.BytesIO()
-    np.savez(buf, frames=frames, meta=np.frombuffer(json.dumps(meta).encode(), np.uint8))
+    arrays = {"frames": frames, "meta": np.frombuffer(json.dumps(meta).encode(), np.uint8)}
+    if plan is not None:
+        arrays["plan"] = plan
+    np.savez(buf, **arrays)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(buf.getvalue())
     os.replace(tmp, path)  # atomic: a kill never leaves a half-written rollout
@@ -138,8 +142,9 @@ def main() -> None:
         history = np.asarray(rt.decode(ep.latents[start - rt.history_frames : start]))
         result = rollout(env, driver)
         frames = np.concatenate((history, np.stack([np.asarray(f) for f in result.worldmodel_outputs["frames"]])))
+        plan = np.stack([np.asarray(q, np.float32) for q in result.worldmodel_outputs["plan"]])  # labels for WM_PLAN_LABELS
         save(path, frames, {"segment": seg, "start": start, "driver": name, "pull_dps": pull_dps, "onset": onset,
-                            "lht": lht[seg], "n_history": len(history)})
+                            "lht": lht[seg], "n_history": len(history)}, plan)
         made += 1
         if made == 1 or made % 10 == 0:
             print(f"[{i + 1}/{args.rollouts}] {seg[:8]} {name} pull {pull_dps:+.1f} deg/s, "

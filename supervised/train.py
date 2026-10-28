@@ -113,6 +113,7 @@ def main() -> None:
     # (wm_dataset.py), labelled by the teacher online; only the image reconstruction has a ground truth there.
     wm_root = os.environ.get("WM_DATA")
     wm_weight = float(os.environ.get("WM_WEIGHT", 1.0))
+    wm_plan_labels = os.environ.get("WM_PLAN_LABELS", "0") == "1"
     wm_iterator = (
         iter(
             DataLoader(
@@ -205,9 +206,18 @@ def main() -> None:
             wm_teacher = {k: torch.from_numpy(v).to(device) for k, v in prefill_supercombo_batch(teacher, wm_queues, wm_inputs).items()}
             wm_inputs = {k: torch.from_numpy(v).to(device) for k, v in wm_inputs.items()}
             wm_targets = {k: torch.from_numpy(v).to(device) for k, v in wm_targets.items()}
+            # PLAN_PATCH: WM_PLAN_LABELS=1 steers by the world model's own plan (anchored to where the human really went)
+            # instead of the teacher, on every generated frame that has one; the teacher still labels everything else.
+            plan_mask, plan_labels = wm_targets.pop("plan_mask", None), wm_targets.pop("plan_action", None)
+            if wm_plan_labels and plan_mask is not None:
+                teacher_action = wm_teacher["action"].clone()
+                teacher_action[..., :2] = torch.where(plan_mask[..., None] > 0, plan_labels.to(teacher_action.dtype), teacher_action[..., :2])
+                wm_teacher["action"] = teacher_action
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 wm_loss, wm_metrics = loss_fn(model(wm_inputs), wm_targets, wm_teacher, outputs=())
             (wm_weight * wm_loss).backward()
+            if plan_mask is not None:
+                loss_metrics["wm/plan_frac"] = plan_mask.mean()
             loss_metrics = {**loss_metrics, "wm": wm_loss.detach(), "wm/distill": wm_metrics["distill"].detach(),
                             **{f"wm/{k}": v.detach() for k, v in wm_metrics.items() if k.startswith("distill/")}}
         grad_norm = torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)

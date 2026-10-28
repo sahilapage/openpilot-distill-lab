@@ -69,4 +69,4 @@ WM_DATA=outputs/wm_data INIT_WEIGHTS=outputs/supervised/supercombo.pt \
     -o outputs/dagger/iter1/supercombo.pt
 ```
 
-Repeat with the new student as the driver. `supervised/train.py` also takes `INIT_WEIGHTS` (start from a checkpoint), `SAVE_EVERY` (resumable checkpoints), `LR_DECAY_START` / `LR_MIN_RATIO` (cosine decay) and `SNAPSHOT_EVERY` (weight snapshots).
+Repeat with the new student as the driver. Rollouts also save the world model's own plan, which is anchored to where the human really drove; `WM_PLAN_LABELS=1` steers by that plan instead of the teacher on generated frames. `supervised/train.py` also takes `INIT_WEIGHTS` (start from a checkpoint), `SAVE_EVERY` (resumable checkpoints), `LR_DECAY_START` / `LR_MIN_RATIO` (cosine decay) and `SNAPSHOT_EVERY` (weight snapshots).

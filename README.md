@@ -70,3 +70,5 @@ WM_DATA=outputs/wm_data INIT_WEIGHTS=outputs/supervised/supercombo.pt \
 ```
 
 Repeat with the new student as the driver. Rollouts also save the world model's own plan, which is anchored to where the human really drove; `WM_PLAN_LABELS=1` steers by that plan instead of the teacher on generated frames. `supervised/train.py` also takes `INIT_WEIGHTS` (start from a checkpoint), `SAVE_EVERY` (resumable checkpoints), `LR_DECAY_START` / `LR_MIN_RATIO` (cosine decay) and `SNAPSHOT_EVERY` (weight snapshots).
+
+On real drives, `AUGMENT=1` adds photometric augmentation (exposure, gamma, contrast, white balance, saturation, blur, sensor noise; one look per clip). The teacher labels the same augmented frames online, so its labels stay consistent with what the student sees. `FRAME_JITTER=40` lets a training clip start on any frame instead of about 25 fixed points per segment. Both are off by default.

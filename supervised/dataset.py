@@ -1,4 +1,5 @@
 import argparse
+import os
 import random
 from collections import defaultdict
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from scipy.ndimage import gaussian_filter1d
 from torch.utils.data import DataLoader, get_worker_info, IterableDataset
 
 from helpers.video_helpers import calibration_view_eulers, calibration_warp_matrix, decode_frames
+
+from . import augment as photometric
 
 COMMA1M_REPO_ID = "commaai/comma1M"
 
@@ -109,7 +112,7 @@ def _pack_image(rgb: np.ndarray) -> np.ndarray:
     uv = yuv[height:].reshape(2, height // 2, width // 2)
     return np.concatenate((y, uv))
 
-# TODO: add image augmentation
+# Photometric augmentation: supervised/augment.py, AUGMENT=1 (train split only).
 
 def _calibration_augmentations(rpy: np.ndarray, num_samples: int, val: bool) -> tuple[np.ndarray, np.ndarray]:
     if val:
@@ -133,6 +136,7 @@ def _load_images(
     frame_skip: int,
     n_frames: int,
     local_rank: int,
+    augment=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     big_camera = "ecamera" if "ecamera/index" in frame_info else "fcamera"
     device_type = int(frame_info["device_type"].item())
@@ -196,6 +200,8 @@ def _load_images(
             big_image = cv2.warpPerspective(
                 big_frames[source_fidx], big_matrices[sample_idx], (SBIG_W, SBIG_H), borderMode=cv2.BORDER_REPLICATE
             )
+            if augment is not None:
+                image, big_image = augment(image, sample_idx, 0), augment(big_image, sample_idx, 1)
             if temporal_idx == temporal_fidxs.shape[1] - 1 and frame_number == n_frames - 1:
                 image_targets[sample_idx, :, :, :3] = cv2.resize(image, (TARGET_WIDTH, TARGET_HEIGHT))
                 image_targets[sample_idx, :, :, 3:] = cv2.resize(big_image, (TARGET_WIDTH, TARGET_HEIGHT))
@@ -288,7 +294,8 @@ def _load_segment(
     frame_skip = CAMERA_FPS // config.fps
     history_idxs = -np.arange(1, 2 * config.fps, config.fps // 4, dtype=np.int32)[::-1]
     temporal_len = 5 * config.fps + int(history_idxs[-1] - history_idxs[0])
-    start = frame_skip * (temporal_len + 1) + int(np.random.randint(0, 5))
+    # FRAME_JITTER=40 lets a sample start on any frame (default 5 keeps the original ~25 start points per segment)
+    start = frame_skip * (temporal_len + 1) + int(np.random.randint(0, int(os.environ.get("FRAME_JITTER", 5))))
     candidates = np.arange(start, len(frame_info["fcamera/t"]) - 200, 40)
     sample_count = min(len(candidates), config.batch_size)
     fidxs = np.random.choice(candidates, sample_count, replace=False)
@@ -308,6 +315,7 @@ def _load_segment(
         frame_skip,
         config.n_frames,
         local_rank,
+        photometric.Photometric(len(fidxs)) if not val and photometric.enabled() else None,
     )
     action_t = np.random.uniform(0.0, 1.0, size=(len(fidxs), 2)).astype(np.float32)
     targets = _load_targets(localizer, temporal_fidxs, augment_from_calib, action_t)

@@ -122,6 +122,13 @@ def _calibration_augmentations(rpy: np.ndarray, num_samples: int, val: bool) -> 
             [float(np.random.uniform()) if np.random.uniform() > 0.8 else 0.0 for _ in range(num_samples)]
         )
     augment_from_calib = rot_from_euler(rpy * multipliers[:, None])
+    # YAW_AUG=D: half the samples get an extra heading error drawn from [-D, D] degrees (an exact view rotation, so the
+    # car looks pointed off course); the human-path targets rotate with it and the teacher labels the rotated frames.
+    yaw_aug = float(os.environ.get("YAW_AUG", 0))
+    if yaw_aug > 0 and not val:
+        yaws = np.deg2rad(np.random.uniform(-yaw_aug, yaw_aug, num_samples)) * (np.random.uniform(size=num_samples) < 0.5)
+        extra = rot_from_euler(np.stack([np.zeros(num_samples), np.zeros(num_samples), yaws], axis=1))
+        augment_from_calib = np.einsum("nij,njk->nik", extra, augment_from_calib)
     eulers_view = calibration_view_eulers(rpy, augment_from_calib)
     return augment_from_calib, eulers_view
 

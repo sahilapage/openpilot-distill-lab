@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import random
+from collections import OrderedDict
 
 import cv2
 import numpy as np
@@ -57,9 +58,10 @@ def make_sample(frames: np.ndarray, meta: dict, end: int, action_t: np.ndarray):
 
 
 class WorldModelDataset(IterableDataset):
-    def __init__(self, root: str, batch_size: int = 8, refresh_every: int = 200):
+    def __init__(self, root: str, batch_size: int = 8, refresh_every: int = 200, cache_size: int = 64):
         super().__init__()
         self.root, self.batch_size, self.refresh_every = root, batch_size, refresh_every
+        self.cache_size = cache_size  # rollouts kept in RAM per worker (~7 MB each); the rest are re-read from disk
 
     def _paths(self) -> list[str]:
         return sorted(glob.glob(os.path.join(self.root, "**", "r*.npz"), recursive=True))
@@ -70,19 +72,21 @@ class WorldModelDataset(IterableDataset):
         rng = random.Random(seed)
         np_rng = np.random.default_rng(seed)
         paths, n = self._paths(), 0
-        cache: dict[str, tuple[np.ndarray, dict] | None] = {}
+        cache: OrderedDict[str, tuple[np.ndarray, dict] | None] = OrderedDict()  # least recently used first
         while True:
             if n % self.refresh_every == 0:
                 paths = self._paths()
-                if len(cache) > 256:
-                    cache.clear()
             n += 1
             if not paths:
                 raise RuntimeError(f"no rollouts under {self.root}")
             batch = []
             for path in rng.choices(paths, k=self.batch_size * 2):
-                if path not in cache:
+                if path in cache:
+                    cache.move_to_end(path)
+                else:
                     cache[path] = load_rollout(path)
+                    while len(cache) > self.cache_size:
+                        cache.popitem(last=False)
                 if cache[path] is None:
                     continue
                 frames, meta = cache[path]

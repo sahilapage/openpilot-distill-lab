@@ -45,9 +45,13 @@ def decode_frames(
         usedevicememory=False,
         outputColorType=PyNvVideoCodec.OutputColorType.RGB,
     )
+    # Feed the stream one GOP at a time: one Decode call on the whole prefix returns every frame up to read_end at
+    # once (about 1000 full-resolution RGB frames, 3-7 GB per camera), not just the wanted ones.
+    bounds = sorted({0, byte_count} | {int(index[i, 1]) for i in iframe_indexes if 0 < int(index[i, 1]) < byte_count})
+    view = memoryview(payload)
     decoded = {}
     frame_index = 0
-    for packet in (payload, b""):
+    for packet in [view[a:b] for a, b in zip(bounds[:-1], bounds[1:])] + [b""]:
         packet_array = np.frombuffer(packet, dtype=np.uint8)
         packet_data = PyNvVideoCodec.PacketData()
         packet_data.bsl = len(packet)
